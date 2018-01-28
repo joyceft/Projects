@@ -1,0 +1,82 @@
+---
+title: "HW4_Tianyi Fang"
+author: "Tianyi Fang"
+date: "October 25, 2017"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+####read in data
+```{r}
+library(randomForest)
+pt<- read.csv("train_property.csv", header = TRUE, stringsAsFactors = FALSE)
+num.NA.pt <- sort(colSums(sapply(pt, is.na)))
+remain.col <- names(num.NA.pt)[which(num.NA.pt <= 0.2 * dim(pt)[1])]
+pt_remain <- pt[,remain.col]
+pt_remain <- pt_remain[,-1]
+```
+####separate data into train/test
+```{r}
+set.seed(1)
+train.ind <- sample(1:dim(pt_remain)[1], dim(pt_remain)[1]*0.7)
+train.data <- pt_remain[train.ind, ]
+test.data <- pt_remain[-train.ind, ]
+```
+####impute NA
+categorical>>factor, as.formula, **no missing value**, need to impute
+```{r}
+str(pt_remain)
+train.data$fips <- as.factor(train.data$fips)
+test.data$fips <- as.factor(test.data$fips)
+set.seed(2)
+train.data <- train.data[which(apply(train.data, 1, function(x) length(which(is.na(x)))==0)), ]
+sum(is.na(train.data))
+test.data <- test.data[which(apply(test.data,1, function(x) length(which(is.na(x)))==0)), ]
+sum(is.na(test.data))
+```
+### Random Forest
+```{r}
+formula <- as.formula(paste("logerror ~ cnt_bathr + cnt_bedr + fips + type_landuse + id_rawcensus_block + region_county + cnt_room + tax_total + tax_land + tax_property + tax_building + sqrt_cal_area + year_built + region_city + sqrt_finished_liv + sqrt_lot"))
+rf <- randomForest(formula, data = train.data, importance = TRUE,
+                   ntree = 20)
+getTree(rf, k = 1, labelVar = TRUE)
+print(rf)
+#this package automatically select the best mtry for us, which is 5. All other value will result in larger error Rate
+```
+####parameter_mtry_ntree
+```{r}
+rf1 <- randomForest(formula, data = train.data, ntree = 30, importance = TRUE)
+getTree(rf1, k = 1, labelVar = TRUE) 
+print(rf1)
+```
+Too less tree will increase error rate, too many trees will increase the model complexity
+We can apply some optimal method to tune the parameters.
+```{r}
+par(mar=rep(2,4)) # change margin in plot setting.
+# check the setting in par(), like 
+par()$mfrow
+par(mfrow = c(1,1))
+
+varImpPlot(rf)
+varImpPlot(rf1)
+```
+
+```{r}
+importanceOrder = order(rf1$importance[, "%IncMSE"], decreasing = TRUE)
+names <- rownames(rf1$importance)[importanceOrder]
+partialPlot(rf1, train.data, eval('tax_property'), 
+            xlab='tax_property')
+partialPlot(rf1, train.data, eval('year_built'), 
+            xlab='year_built')
+library(tabplot)
+tableplot(train.data, c('logerror', 'tax_land'), scales = 'lin')
+# Verify the relationships between feature and response
+```
+####test data
+```{r}
+test.pred <- predict(rf1, test.data) 
+sum((test.pred - test.data$logerror)^2, na.rm = T) / length(which(!is.na(test.pred)))
+```

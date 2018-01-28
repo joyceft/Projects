@@ -1,0 +1,144 @@
+---
+title: "xgboost_zillow"
+author: "Tianyi Fang"
+date: "October 28, 2017"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+```{r}
+library(data.table)
+library(xgboost)
+library(caret)
+rm(list=ls())
+# load("../CleanTrain.Rdata")
+# load("../cv_mse.Rdata")
+# source("../regionlm.R")#change to your own directory
+pt <- read.csv("train_property.csv", header = TRUE, stringsAsFactors = FALSE)
+train <- read.csv("train.csv", header = TRUE, stringsAsFactors = FALSE)
+pt <- pt[,-1]
+write.csv(pt, "train_property.csv")
+#prepare data
+pt$flag_tub <- ifelse(pt$flag_tub == "true",1,0)
+pt$flag_fireplace <- ifelse(pt$flag_tub == "true",1,0)
+pt$code_landuse <- as.numeric(as.factor(pt$code_landuse))
+pt$descb_property <- as.numeric(as.factor(pt$descb_property))
+dtrain <- subset(pt, pt$logerror >-0.4& pt$logerror <0.418)
+
+##xgboost setup
+target <- pt$logerror
+dtrain <- pt[ ,!(colnames(dtrain) %in% c("id_parcel", "logerror","transactiondate"))]
+tmean = mean(target)
+
+feature_name <- names(dtrain)
+dtrain <- xgb.DMatrix(as.matrix(dtrain), label = target, missing = NA)
+dtest <- xgb.DMatrix(data= as.matrix(property[, feature_name, with=FALSE]), missing = NA)
+###cross validation
+fold_cv <- createFolds(target, k=5, list = TRUE, returnTrain = FALSE)
+##set xgboost parameters, just pick some, which need further tuning
+param <- list(booster = "gblinear",
+              objective = "reg:linear",
+              sumsample = 0.7,
+              max_depth = 5,
+              colsample_bytree = 0.7,
+              eta = 0.037,
+              eval_metric = "mae", 
+              base_score = 0.012,
+              min_child_weight = 100)
+#preform
+xgb_cv <- xgb.cv(data = as.matrix(dtrain), label = target,
+                 params = param,
+                 nrounds = 100,
+                 prediction = TRUE,
+                 maximize = FALSE,
+                 folds = fold_cv,
+                 early_stopping_rounds = 30, 
+                 print_every_n = 5)
+print(xgb_cv$)
+# logerror
+id = pt$id_parcel
+pt$id_parcel <- NULL
+
+# binary to logical
+col.binary = c("flag_tub","flag_fireplace")
+pt[,col.binary] = sapply(pt[, col.binary], as.logical)
+
+# using complete case
+pt = pt[complete.cases(train.drop5), ]
+logerror = train.drop5$logerror 
+train.drop5$logerror <- NULL
+
+# split to train test
+set.seed(1)
+train.ind <- sample(1:dim(train.drop5)[1], dim(train.drop5)[1] * 0.7)
+
+# region infos are too large, which over lap with longitude and latitude
+train.logerror = logerror[train.ind]
+test.logerror = logerror[-train.ind]
+
+region.cols = c("county", "region_zip", "region_city", "zoning_property", "num_room")
+remain.cols = setdiff(names(train.drop5), region.cols)
+
+train.data <- model.matrix(~.-1,data=train.drop5[train.ind, remain.cols])
+test.data <- model.matrix(~.-1,data=train.drop5[-train.ind, remain.cols])
+
+# xgboost
+# grid searching for parameters.
+all_param = NULL
+all_test_rmse = NULL
+all_train_rmse = NULL
+
+library(xgboost)
+
+for (iter in 1:3) {
+  print(paste("-------", iter,"-------"))
+  
+  param <- list(objective = "reg:linear",
+                max_depth = sample(5:12, 1),
+                subsample = runif(1, .6, .9),
+                colsample_bytree = runif(1, .5, .8)
+                #   eta = runif(1, .01, .3)
+                #  gamma = runif(1, 0.0, 0.2),
+                #  min_child_weight = sample(1:40, 1),
+                #  max_delta_step = sample(1:10, 1)
+  )
+  cv.nround = 100
+  cv.nfold = 5
+  seed.number = sample.int(10000, 1)[[1]]
+  set.seed(seed.number)
+  
+  # cv model
+  mdcv <- xgb.cv(data=train.data,
+                 label = train.logerror,
+                 params = param, 
+                 nfold=cv.nfold,
+                 nrounds=cv.nround,
+                 early_stopping_rounds = 10, 
+                 maximize=FALSE)
+  
+  # train rmse
+  min_train_rmse = min(mdcv$evaluation_log$train_rmse_mean)
+  # test rmse
+  min_test_rmse = min(mdcv$evaluation_log$test_rmse_mean)
+  
+  all_param <- rbind(all_param, unlist(param)[-1])
+  all_train_rmse <- c(all_train_rmse, min_train_rmse)
+  all_test_rmse <- c(all_test_rmse, min_test_rmse)
+}
+
+all_param <- as.data.frame(all_param)
+best_param <- all_param[which(all_test_rmse == min(all_test_rmse)), ]
+gbt <- xgboost(data =  train.data, 
+               label = train.logerror, 
+               params = best_param,
+               nrounds=100,
+               early_stopping_rounds = 10,
+               maximize = FALSE)
+
+# prediction
+prediction <- predict(gbt, test.data)
+mean((prediction - test.logerror)^2)
+
+```
