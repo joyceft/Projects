@@ -1,0 +1,230 @@
+def ShowTableau(tableau):
+    print "********************************"
+    for row in tableau:
+        print row
+    print "*********************************"
+    return
+#Show the entire tableau as it is called
+
+def GetTableau(c, sts, b):
+    #c is the coefficients of objective function
+    #sts are constraints
+    tableau = []
+    m = len(sts)
+    n = len(c)
+    # m,n are the number of row/column of the matrix,
+    # m,n are the number of constraints/variables of the problem
+    c.insert(0,0.0)
+    #set the first element of row c to 0, as the coefficient value of z0
+    artificial = []
+    z = [0.0]
+    #set artificial as an empty set, to record the added artificial variables
+    #set z as the row 0 of the tableau(the actual 1st row is the coefficients of objective function
+    #z in tableau is like 1,0,cbB-1N-Cn, cbB-1b
+    #the first column will denote the values of the basic variables(including the objective function
+    #just like the column of RHS)
+    for i in range(m):
+        artificial.append(0.0)
+        z.append(-1.0)        
+    for i in range(n):
+        z.append(0.0)
+    #add m slack variables since there are m less/equal constraints
+    #add n 0 to z, as the coefficients of n non-artificial variables
+    #then add m 1 to z, as the coefficients of m artificial variables
+    c.extend(artificial)
+    tableau.append(c)
+    tableau.append(z)
+    # add row c, and row z to our tableau
+    i = 0
+    for st in sts:
+        st.insert(0,b[i])
+        st.extend(artificial)
+        st[n + i + 1] = 1.0
+        i = i + 1
+    # for constraint row i , add b[i] to the first column, to denote
+    # the value of the basic variables and objective function
+    for xi in tableau:
+        if i > 1:
+            j = 0
+            for xij in xi:
+                tableau[1][j] = tableau[1][j] + xij
+                j = j + 1
+        i = i + 1
+    # just as the step of BJS textbook, first write down the coefficients of objective functions
+    #in row 0, then add the rest rows to row 0 to reduce the value of cbB-1N-Cn to 0.          
+def PivotOn(tableau,row,col):
+    j = 0
+    basic = tableau[row][col]# give basic the value of tableau[row][col]
+    for x in tableau[row]: 
+        tableau[row][j] = tableau[row][j] / basic
+        j = j + 1
+    #tableau[row][col]is Yrk, the pivot element of this iteration, divide row r by Yrk
+    #so that the Yrk will be 1, to get the identical matrix of xB. 
+    i = 0
+    for xi in tableau:
+        if i!= row:
+            ratio = xi[col]
+            j = 0
+            for xij in xi:
+                xij = xij-ratio*tableau[row][j]
+                tableau[i][j] = xij
+                j = j + 1
+        i = i + 1
+    # i from 0 to len(row), xi means every element in i row. for i=1..m,and i!=r,
+    #update every element of the ith row by adding to it -Yik times
+    # the new rth row(let ratio to record the value of Yik).
+    for xi in tableau:
+        if i > 1:
+            j = 0
+            for xij in xi:
+                tableau[1][j] = tableau[1][j] - xij
+                j = j + 1
+        i = i + 1
+    # to the second row(Row 0= tableau[1],j starts from 0 to n+m),
+    #adding to it Ck-Zk times the new rth row by elementary row operations
+    
+    return tableau
+
+def Phase1Simplex(tableau):
+    negativevalue = -0.0001 #set a negative value to compare with the result we get after pivoting 
+    optimal = False
+    unbounded = False#the default optimal and unbounded are False,
+    #once the tableau gets those condition, they will turn to True.
+    n = len(tableau[0])#number of variables
+    m = len(tableau)-2 #do not count the column 0(RHS) and the pivoting column
+
+    while((not optimal) and (not unbounded)):
+    #neither optimal nor unbounded, the iteration is not finished yet
+        maxvalue = 0.0 #set as none-negative point
+        pivotcol = 1#start from 2rd column, to compare the value of cbB-1N-Cn to find the max,
+                    #that column k contains
+        j = 1       #one of the element xk, which will enter the basis
+        while (n-m) > j:
+            cj = tableau[1][j]
+            if cj > maxvalue:
+                maxvalue = cj
+                pivotcol = j#find the max value of row 0, that column is the Xk, leaves the basic
+            j = j + 1
+        if maxvalue == 0.0:#when every element of row 0 is negative, no variables will enter the basic
+            optimal = True
+            return (-2, -2)
+        pivotrow = 0# similarly, start from 1st row
+        i = 0
+        minvalue = negativevalue
+        for xi in tableau:#since we know Xk will leaves the basic, now we want to 
+                          #know i row enters the basic.
+            if i > 1:
+                xij = xi[pivotcol]#find i row element inside the selected column
+                if xij > 0:
+                    if xi[0]==0:#Blend's rule: if B-1b=0,just choose the smallest index to enter the basis.
+                        pivotrow = i
+                    else:
+                        value = xi[0] / xij#calculate the value of {bi/Yik}
+                        if value < minvalue:
+                            minvalue = value
+                            pivotrow = i #find the i for the min{bi/Yik}, thus xi will enter the basis
+            i = i + 1
+            if minvalue == negativevalue:
+                unbounded=True
+                return (-1, -1)#if there is no value larger than 
+    return (i, j)
+    #this section is to find the Yrk that does the pivoting.return i,j as row and col to the tableau.
+    
+    tab = GetTableau
+    while True:
+        pivot_index = Phase1Simplex(tab)
+        if pivot_index is (-1, -1):
+            print "optimal = False"
+            print "unbounded = True"
+    #when all the yik is less than 0, the problem is unbounded along the (yik,e) ray.
+    #Thus, shows that this LP is unbounded, not optimal 
+            break
+        elif pivot_index is (-2, -2):
+            print "optimal = True"
+            print "unbounded = False"
+            Phase2Simplex(tableau)
+        #when the tableau gets optimal, the phase1simplex ends and keeps to phase2Simplex
+        #shows this LP is optimal but not unbounded
+        else:
+            row = pivot_index[0]
+            col = pivot_index[1]
+            tab = PivotOn(tab, row, col)
+        #neither unbounded nor optimal, thus pivoting is continuing, send i,j to pivotOn,
+        #to do the elementary row operation, until either unbounded or optimal
+def simplex(tableau):
+     
+    Phase1Simplex(tableau)
+    m= len(tableau)-1
+    tableau = PivotOn(tableau, pivotrow, pivotcol)
+    return tableau
+    #almost the same as Phase1Simplex, except m = len(tableau)-1 instead of
+    #m = len(tableau)-2, since it is for the phase 2.  
+
+def ArtificialBasisOut(tableau): 
+    n = len(tableau[0])#n is the number of all legitmate variables and artificial variables
+    j = n - 1 #do not count the column 0
+    basis = True #set the first basis is what we need, default as True
+    while j > 0:
+        found = False #whether find the artificial variable to drop out or not
+        i = -1
+        row = 0
+        for xi in tableau:
+            i = i + 1              #first check every element of first row(coefficient row),                                  
+            if 1 == xi[j]:         #if all elements are 1, that means we are still work on phase1
+                if found:
+                    basis = False
+                    continue
+                elif i > 1:        
+                    row = i
+                    found = True
+            elif xi[0]! == 0:      #see if the RHS value of phase1 tableau is 0 or not, if not, then
+                basis = False      #it is not the basis
+                continue
+            if basis and found:    #this condition is:either not basis not found, or basis and found
+                if n < = j:         
+                    tableau = PivotOn(tableau, row, j)
+                else:
+                    return tableau
+            j = j - 1
+        return tableau
+                
+ def Phase2Simplex(tableau):
+     infeasible = False#still feasible
+     tableau = Phase1Simplex(tableau)#operating phase one simplex method
+     z = tableau[1][0]#the cbB-1b
+     if 0 < z:# in phase1 z>0 indicates it is infeasible, 
+         infeasible = True
+         print "infasible!"
+     else: #feasible, z = 0
+         # tableau = ArtificialBasisOut(tableau)
+         m = len(tableau)-2
+         n = len(tableau[0])
+         n = n - m
+         tableau.pop(1)#pop means remove the final element of this row,
+         #and then return to the place of this element.
+         #tableau.pop(1) means remove the 2rd element
+         i = 0
+         while len(tableau) > i:
+             tableau[i] = tableau[i][:n]#drop artificial variables, :n means from 0 to n-m.
+             i = i + 1
+         tableau = simplex(tableau)
+     return tableau
+
+c  = [-30.0, -12.0, -15.0, 0.0, 0.0, 0.0, 0.0]
+st1 = [9.0, 3.0, 5.0, 1.0 , 0.0, 0.0, 0.0]
+st2 = [5.0, 4.0, 0.0, 0.0, 1.0, 0.0, 0.0]
+st3 = [3.0, 0.0, 2.0, 0.0, 0.0, 1.0,0.0]
+st4 = [0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 1.0]
+sts = [st1, st2, st3, st4]
+b = [500, 350, 150, 20]
+#since we know how to add artificial variables, we need to input standard form so that it can operate correctly.
+def main():
+    tableau = GetTableau(c, sts, b)#get the initial tableau
+    print " The standard form of this linear program is:"
+    ShowTableau(tableau)#show the initial tableau
+    tableau = Phase2Simplex(tableau)# in phase2Simplex:Phase1-pivot-artificial drop-phase2-optimal?unbdd?
+    print " The final tableau is:"
+    ShowTableau(tableau)
+    print " The Optimal is ={}".format(-tableau[0][0])
+
+main()
