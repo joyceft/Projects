@@ -1,0 +1,1296 @@
+---
+title: "weak learner"
+author: "Tianyi Fang"
+date: "December 3, 2017"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+####library
+```{r}
+library(MASS)#for nullspace
+library(mvtnorm)#for multivariate normal
+library(plyr)#cv_progress bar
+library(GA)
+library(freestats)#decision stump
+library(pROC)#get the threshold of glm
+library(caret)#get base model
+library(ModelMetrics)#for MCC evaluation
+library(mlbench)#Sonar data
+library(dplyr)#group_by
+library(stringr)
+```
+################################
+#########pre-process############
+generate self-written simulation dataset
+1.simulated dataset
+```{r}
+simudata <- function(w,n){
+  #w is # of feature+1, n is # of obs 
+  d <- length(w)-1
+  #get offset vector and basis contains w and its nullspace
+  offset <- -w[length(w)]*w[1:d]/sum(w[1:d]^2)
+  basis <- cbind(Null(w[1:d]),w[1:d])
+  #create samples
+  sample <- rmvnorm(n, mean = rep(0,d), sigma = diag(1,d)) %*% t(basis)
+  sample <- sample + matrix(rep(offset,n),n,d, byrow = T)
+  sample <- cbind(sample,1)
+  #get the label
+  y <- as.vector(sign(sample%*%w))
+  #add correlative factors to points that lie on the hyperplane
+  sample[y==0,1:d] <- sample[y==0, 1:d]+runif(1,-0.5,0.5)*10^(-4)
+  y <- as.vector(sign(sample%*%w))
+  return(list(sample = sample, y=y))
+}
+#t1.simudata <- simudata(c(1,1,1),10)
+
+```
+##simulation dataset
+```{r}
+set.seed(1024)
+z <- runif(5)
+mydata <- simudata(w=z, n=100)
+X <- mydata$S[,1:4]
+y <- mydata$y 
+data_t <- as.data.frame(cbind(X,y))
+#give weight to each data
+w <- rep(1/100,100)
+#this simulation dataset is very imbalanced with 16/70 negative
+#####################################
+####also can generate simulation data by twoClassSim
+#total 15 features, 200 obs
+tcs <- twoClassSim(n=200, noiseVars = 10, corrVars = 5)
+table(tcs$Class)
+```
+2.cross-validation 10 fold
+```{r}
+#for decision stump
+coste <- function(y,yhat){
+  mean(y!=yhat)
+}
+costm<- function(y,yhat){
+  mean((y-yhat)^2)
+}
+cv <- function(fun, k=10, data, cost, response='y',...){
+  #generate folds
+  folds <- data.frame(Fold = sample(rep(1:k, length.out = NROW(data))),Row = 1:NROW(data))
+  error <- 0
+  
+  for(f in 1:max(folds$Fold)){
+    row.index <- folds$Row[folds$Fold ==f]
+    mod <- fun(data[-row.index,],...)
+    pred <- predict(mod, data[row.index,])
+    cost <- cost(data[row.index, response], pred)
+    error <- error + cost*(length(row.index)/NROW(data))
+  }
+  return(error)
+}
+#for general
+k=10
+  data_test <- data
+  data_test$id <- sample(1:k, nrow(data_test), replace = T)
+  list <- 1:k
+  #prediction and testset data_test frames that we add to with each   iteration over the folds
+  prediction <- data.frame()
+  vaildsetCopy <- data.frame()
+  #Creating a progress bar to know the status of CV
+  progress.bar <- create_progress_bar("text")
+  progress.bar$init(k)
+  
+  for(i in 1:k){
+    #for id i as ith validset
+    trainset <- subset(data_test, id %in% list[-i])
+    vaildset <- subset(data_test, id %in% c(i))
+    #run a model
+    mymodel <- ...
+    #save predict_result in temp
+    temp <- as.data.frame(predict(mymodel, validset[c(-11)]))
+    prediction <- rbind(prediction, temp)
+    #append this iteration's vaildation set to the validsetCopy
+    validsetCopy <- rbind(validsetCopy, as.data.frame(validset[c(11)]))
+    progress.bar$step()
+  }
+  #add predictions and actual dependen variables values
+  result <- cbind(prediction, validsetCopy[,1])
+  names(result) <- c("Predicted","Actual")
+  result$Difference <- result$Actual == result$Predicted
+  table(result$Difference)
+  #Accuracy
+  sum(result$Difference)/length(result$Difference)
+#########################################################################
+##just generate 10-fold cross-validation on training data################
+#data is a data.frame with D col features, (D+1)th as label, (D+2)th as id  
+cv <- function(k=10, data){
+  data_test <- data
+  data_test$id <- sample(1:k, nrow(data_test), replace = T)
+  prediction <- data.frame()
+  validset.copy <- data.frame()
+  #Creating a progress bar to know the status of CV
+  progress.bar <- create_progress_bar("text")
+  progress.bar$init(k)
+  
+  #generate k fold
+  trainset <- list()
+  validset <- list()
+  index <- c(1:k)
+  for(i in 1:k){
+    trainset[[i]] <- subset(data_test, id != i)
+    validset[[i]] <- subset(data_test, id == i)
+  }
+}
+################################################################
+```
+##try some weak learners
+1.Decision Stump
+```{r}
+#test
+set.seed(1024)
+z <- runif(5)
+mydata <- simudata(w=z, n=100)
+X <- mydata$S[,1:4]
+y <- mydata$y 
+data_t <- as.data.frame(cbind(X,y))
+w <- rep(1/100,100)
+
+#decision stump
+ds <- function(X,w,y){
+  if(class(w)!="matrix"){
+    w <- as.matrix(w) #as one col
+  }
+  theta <- vector()
+  best.cost <- c()
+  compare <- 10
+  for(d in 1:dim(X)[2]){
+    if(!is.factor(X[,d])){
+      for(n in 1:dim(X)[1]){
+        yhat <- 2*(X[,d]>X[n,d])-1
+        cost.temp <- t(w) %*%(y!=yhat)/sum(w)
+        if(cost.temp<compare){
+          compare <- cost.temp
+          best.theta <- X[n,d]
+          best.j <-d
+          best.n <-n
+        }
+      }
+    }
+    else stop("only for numeric input")
+  }
+  result <- list(j=best.j, theta=best.theta, m= 1)
+  class(result) <- "ds"
+  return(result)
+}
+pars <- ds(X=X, w=w, y=y)
+```
+2.Logistic classifier
+```{r}
+#glm package
+specificity <- 0
+sensitivity <- 0
+errorrate1 <- 0
+totalpositive <- nrow(subset(test, test$class ==1))
+totalnegative <- nrow(subset(test, test$class == -1))
+y.log <- ifelse(Y==-1, 0,1)
+sd1.log <- cbind(data_t[,c(1:4)], y.log)
+#separate train set and test set
+train.log <- separate(sd1.log)[[1]]
+test.log <- separate(sd1.log)[[2]]
+model_lr <- glm(y.log~., family = binomial(link="logit"), data=train.log)
+summary(model_lr)
+#use train data's preformance to get the best threshold
+lr.prob <- predict(model_lr, type = "response")
+#don't know the value of threshold
+#use pROC package
+model.log.roc <- roc(train.log$y.log, lr.prob)
+plot(model.log.roc,print.auc=TRUE,auc.polygon=TRUE,grid=c(0.1,0.2),grid.col=c("green","red"),max.auc.polygon=TRUE,auc.polygon.col="skyblue",print.thres=TRUE)
+#choose the threshold as 0.842
+plot(model.log.roc, print.auc = T, print.thres = T)
+#predict the testdata
+lr.pred <- predict(model_lr, type = "response", newdata = test.log)
+lr.pred1 <- ifelse(lr.pred>0.842, 1,0)
+miserror <- mean(lr.pred1 != test.log$y.log)
+#error is 0.56
+#try ROCR package
+library(ROCR)
+pp <- prediction(lr.pred, test.log$y.log)
+perfspec <- performance(prediction.obj = pp, measure = "spec", x.measure = "cutoff")
+plot(perfspec)
+par(new=TRUE)
+perfsens <- performance(prediction.obj = pp, measure="sens", x.measure="cutoff")
+#get the intersect point
+plot(perfsens)
+#same threshold = 0.843
+#########
+sd1.log$y.log <- factor(sd1.log$y.log)
+train.log <- separate(sd1.log)[[1]]
+test.log <- separate(sd1.log)[[2]]
+model_lr <- train(y~., data = train.log, method = "glm")
+pphh <- predict(model_lr, newdata = test.log)
+
+
+table(train.log$y.log, lr.prob>0.842)
+table(train.log$y.log)
+```
+Logistic Classifier need -1, 1, not very feasible p.learner for the following mixed boosting algorithm. 
+Since deal with binary classification, use ROC as evalution of p.learner
+if use caret, set the (trControl, metric ="ROC/Accuracy", ..., preProcess, tunelength)
+fitControl <- trainControl(method = "cv", number = 5, preProcOptions = list(thresh = 0.99), classProbs = TRUE, summaryFunction = twoClassSummary)< that is for binary classification
+3.Decision tree
+```{r}
+#library(caret)
+#sd.data_t for decision tree, change y as factor
+data_t$y <- factor(data_t$y)
+
+train.dt <- separate(data_t)[[1]]
+test.dt <- separate(data_t)[[2]]
+colnames(train.dt)[5] <-"output" 
+dtControl <- trainControl(method = "cv", number = 5)
+fitControl <- trainControl(method = "repeatedcv", repeats = 3, classProbs = TRUE, preProcOptions = list(thresh = 0.99), summaryFunction = twoClassSummary)
+model_dt <- train(output~., train.dt, method = "rpart", trControl = fitControl, preProcess = c("center", "scale"), metric = "ROC", tuneLength = 10)
+pred_dt <- predict(model_dt, test.dt)
+confusionMatrix(pred_dt, test.dt$y, positive = "1")
+#93.33
+model_dt
+```
+4.KNN
+```{r}
+data_t$y <- factor(data$y)
+train.knn <- separate(data_t)[[1]]
+test.knn <- separate(data_t)[[2]]
+
+dtControl <- trainControl(method = "cv", number = 5)
+model_knn <- train(y~., train.knn, method = "knn", trControl = fitControl, tuneLength = 10)
+pred_knn <- predict(model_knn, test.knn)
+confusionMatrix(pred_knn, test.knn$y, positive = "1")
+
+```
+
+5.SVM
+```{r}
+data_t$y <- factor(data$y)
+train.svm <- separate(data_t)[[1]]
+test.svm <- separate(data_t)[[2]]
+model_svm <- train(y~., train.svm, method = "svm", trControl = dtControl, tuneLength = 10)
+pred_svm <- predict(model_svm, test.svm)
+confusionMatrix(pred_svm, test.svm$y, positive = "1")
+
+```
+in the boosting algorithm, we update weights based on the error-rate of weak learner, so if the performance of weak learner is too high(as completed strong models), the error-rate may be 0, which could cause error. So try different weak learners, select those relatively bad preformed learners.
+
+In order to test, applied simulated data and real-world dataset.
+################################
+            new
+################################
+###1.prepare for real-world dataset
+```{r}
+#1.change label into {-1,1}
+data <- read.csv(...)
+data$class <- 2*as.integer(data$class=="M")-1
+#if not change label into 1,-1, give the positive/negative as p/n, but decide positive and negative depends on the real world problem
+#for sonar dataset, set M as 1, R as -1
+
+#2.put class into last col and give the name as Class, change the positive label as p
+pndata <- function(rowdata, plabel){
+  if(colnames(rowdata)[length(rowdata)]!="Class"){
+    colnames(rowdata)[length(rowdata)] <- "Class"
+  }
+  #this is just for Sonar
+   rowdata$Class <- ifelse(rowdata$Class == plabel, "p", "n")
+   rowdata$Class <- factor(rowdata$Class)
+   return(dataset = rowdata)
+}
+
+#3.devide the data set into testing & training
+
+separate <- function(data){
+    set.seed(111)
+    training.index <- sample(nrow(data), nrow(data)*0.7)
+    trainset <- data[training.index, ]
+    testset <- data[-training.index, ]
+    return(list(trainset, testset))
+}
+#hh <- separate(sd1.log)
+```
+set train.Control: repeat 1; 10-fold cv; returnData; sampling; returnResamp(save resampled results) can be used to deal with imbalanced data,
+```{r}
+#no repeat 10 fold
+ctrl.f <- trainControl(method = "repeatedcv", repeats =1,  classProbs=TRUE, summaryFunction = twoClassSummary, search = "random", savePred = TRUE, returnData = TRUE, returnResamp = "all")#save cv prediction
+```
+##2.test for weak lerner on sonar dataset, with no tuning
+```{r}
+
+#with Sonar dataset
+data(Sonar)
+Sonar <- pndata(Sonar, "M")
+train.sonar <- separate(Sonar)[[1]]
+test.sonar <- separate(Sonar)[[2]]
+#repeat 3 times control
+ctrl <- trainControl(method = "repeatedcv", repeats =3, classProbs=TRUE, summaryFunction = twoClassSummary)
+
+#1.PLS(partial least squares discriminant analysis)
+model.pls <- train(Class~.,data = train.pima, method = "pls", preProcess = c("center", "scale"), metric = "ROC", tuneLength = 10, trControl = ctrl.f)
+#model.pls
+pred.pls <- predict(model.pls, newdata = test.pima)
+scp <- confusionMatrix(data = pred.pls, test.pima$Class, positive = "p")
+#0.79
+#0.95
+#2.C5.0
+model.c5 <- train(Class~.,data = train.pima, method = "C5.0", preProcess = c("center", "scale"), metric = "ROC", tuneLength = 10, trControl = ctrl.f)
+#model.c5
+pred.c5 <- predict(model.c5, newdata = test.pima)
+confusionMatrix(data = pred.c5, test.pima$Class, positive = "p")
+#0.82
+#
+#3.rpart
+model.rpart <- train(Class~., data=train.pima, method = "rpart2", metric ="ROC", preProcess = c("center", "scale"), tuneLength = 10, trControl = ctrl.f)
+pred.rpart <- predict(model.rpart, newdata = test.pima)
+scrp <- confusionMatrix(data = pred.rpart, test.pima$Class, positive = "p")
+#0.7778
+#0.95
+#4.knn
+model_knn <- train(Class~., data=train.pima, method = "knn", metric ="ROC", preProcess = c("center", "scale"), tuneLength = 10, trControl = ctrl.f)
+pred.knn <- predict(model_knn, newdata = test.pima)
+sckp <-confusionMatrix(data = pred.knn, test.pima$Class, positive = "p")
+#0.7778
+#0.94
+#5.svm
+ctrl.try <- trainControl(method = "repeatedcv", repeats =3, classProbs=TRUE, savePred = TRUE, summaryFunction = twoClassSummary)#save cv prediction
+model.svm <- train(Class~., data=train.pima, method = "svmLinear", metric ="ROC", preProcess = c("center", "scale"), tuneLength = 10, trControl = ctrl.f)
+pred.svm <- predict(model.svm, newdata = test.pima)
+scvp <- confusionMatrix(data = pred.svm, test.pima$Class, positive = "p")
+#0.7302
+############################################################
+#6.Naive Bayes
+model.nb <- train(Class~., data=train.pima, method = "nb", metric ="ROC", preProcess = c("center", "scale"), tuneLength = 10, trControl = ctrl.f)
+pred.nb <- predict(model.nb, newdata = test.pima)
+confusionMatrix(data = pred.nb, test.pima$Class, positive = "p")
+#0.746
+
+#7.Logistic Model trees
+model.lmt <- train(Class~., data=train.pima, method = "LMT", metric ="ROC", preProcess = c("center", "scale"), tuneLength = 10, trControl = ctrl.f)
+pred.lmt <- predict(model.lmt, newdata = test.pima)
+confusionMatrix(data = pred.lmt, test.pima$Class, positive = "p")
+#0.746
+#8.Rule based classifier
+model.rule <- train(Class~., data=train.cancer, method = "PART", metric ="ROC", preProcess = c("center", "scale"), tuneLength = 10, trControl = ctrl.f)
+pred.rule <- predict(model.rule, newdata = test.cancer)
+confusionMatrix(data = pred.rule, test.cancer$Class, positive = "p")
+#0.7302
+#9. Single rule classification
+model.1rule <- train(Class~., data=train.pima, method = "OneR", metric ="ROC", preProcess = c("center", "scale"), tuneLength = 10, trControl = ctrl.f)
+pred.1rule <- predict(model.1rule, newdata = test.pima)
+confusionMatrix(data = pred.1rule, test.pima$Class, positive = "p")
+#0.63
+#10.single C5.0 Tree
+model.stree <- train(Class~., data=train.pima, method = "adaboost", metric ="ROC", preProcess = c("center", "scale"), tuneLength = 10, trControl = ctrl.f)
+pred.stree <- predict(model.stree, newdata = test.pima)
+confusion.pima <- confusionMatrix(data = pred.stree, test.pima$Class, positive = "p")
+#0.73
+#11.Neural Netwwork
+model.nnet <- train(Class~., data=train.pima, method = "nnet", metric ="ROC", preProcess = c("center", "scale"), tuneLength = 10, trControl = ctrl.f)
+pred.nnet <- predict(model.nnet, newdata = test.pima)
+confusionMatrix(data = pred.nnet, test.pima$Class, positive = "p")
+#0.8095
+```
+#############################################
+#########strong learner######################
+#boosted classification tree
+```{r}
+model.ada <- train(Class~., data=train.sonar, method = "ada", metric ="ROC", preProcess = c("center", "scale"), trControl = ctrl.f)
+pred.ada <- predict(model.ada, newdata = test.sonar)
+confusionMatrix(data = pred.ada, test.sonar$Class, positive = "p")
+#accu = 0.8889
+#boostedtree
+btGrid <- expand.grid(.mstop = c(10,20), .maxdepth = seq(1,10, 2))
+model.btree <- train(Class~., data=train.sonar, method = "blackboost", metric ="ROC", preProcess = c("center", "scale"), tuneGrid = btGrid, trControl = ctrl.f)
+pred.btree <- predict(model.btree, newdata = test.sonar)
+confusionMatrix(data = pred.btree, test.sonar$Class, positive = "p")
+
+```
+###################################
+####alternate tuning grids########
+for parameter tuning: expand.grid
+every classifier with different tuning parameter is treated as a weak learner, named p.learner.choose 3/5(10/4)base learners
+```{r}
+#trainControl(method = "repeatedcv/boot/oob(only for RF)", number:# of folds, repeats(for repeatedCV), returnData= TRUE(for saving the data), returnResamp(save"all"/"final"/"none")of resampled summary metrics, savePredictions, classProbs(classProb be calculated for classification models in each resample), summaryFunction)
+
+#alternate tuning grids (every grid has 10 parameters)
+#each parameter is a base learner
+plsGrid <- expand.grid(.ncomp = seq(1,10, by = 2))#1
+plsGrid2 <- expand.grid(.ncomp = seq(1,9, by = 1))#for pima
+svmGrid <- expand.grid(C=c(0.0001, 0.001, 0.01, 0.1, 1,2, 5,10,15,20))#1
+rpartGrid <-expand.grid(.maxdepth = seq(5,14))#1 maxdepth is for rpart2
+knnGrid <- expand.grid(k =seq(2,20, by = 2))#1
+c5Grid <- expand.grid(.winnow = c(TRUE, FALSE), .trials = c(1,2,3,4,5), .model = "tree")#c5 is the only one has 3 parameters
+#maybe not use c5.0
+nbGrid <- expand.grid(fL = c(0,0.5,1.0), usekernel = TRUE, adjust = c(0,0.5,1.0))
+lmtGrid <- expand.grid(iter = c(1:10))
+partGrid <- expand.grid(thershold = seq(0,1, by = 0.2), pruned = "yes")
+OneRGrid <- expand.grid(parameter = "None")
+
+#test
+# kk <- train(Class~., data=train.sonar, method = "knn", metric ="ROC", preProcess = c("center", "scale"), tuneGrid = knnGrid, trControl = ctrl.f)
+# rr <-train(Class~., data=train.sonar, method = "rpart2", metric ="ROC", preProcess = c("center", "scale"), tuneGrid = rpartGrid, trControl = ctrl.f)
+```
+save grid as a list.library
+```{r}
+grid.lib <- list(svmGrid, knnGrid, rpartGrid, plsGrid)#OneR's parameter is unknown...s
+grid.lib <- list(svmGrid, knnGrid, rpartGrid, plsGrid2)#2 is for pima
+base.learner <- c("svmLinear","knn","rpart2","pls")
+```
+####generate p.learner
+tuneLength = # of levels for each tuning parameters(grid)= # of tuning parameter combinations when generated by random search, 
+return a list($results:df of error rate of tuning parameter)
+($metric:specifies what summary metric will be used to select the optimal model)
+(finalModel, resample(a df with columns for each performance metric), )
+```{r}
+model.svm.t <- train(Class~., data=train.sonar, method = "svmLinear", metric ="ROC", preProcess = c("center", "scale"), tuneLength = 10, tuneGrid = svmGrid, trControl = ctrl.f)
+#the model.svm.t$results are the weak learners's preformance
+#the model.svm.t$pred are the prediction of each weak learners(data.frame)
+#error <- sum(pred.df$pred !=pred.df$obs)/nrow(pred.df)
+```
+
+get the error for each base_learner of training in order to calculate weights for each observation and p.learner. To generalize, change the tuning parameter of each p.learner as param.
+```{r}
+basic.names <- c("pred","obs","rowIndex","p","n","Resample")
+##get the parameter name, each parameter value is related to one p.learner of its class
+change_param_name <- function(prediction.table){
+  param.index <- which(!colnames(prediction.table)%in%basic.names)
+  colnames(prediction.table)[param.index] <- "param"
+  return(prediction.table)
+}
+#pr.svm <- change_param_name(model.svml[[2]])
+```
+group by parameter, then calculate error for each p.learner
+```{r}
+error <- function(pred, obs, w = rep(1/length(pred), length(pred))){
+  w <- rep(1/length(pred), length(pred))
+  error <- t(w)%*%(pred != obs)/sum(w)
+}
+# vote <- function(error){
+#   vote <- as.numeric(log((1-error)/error))
+# }
+```
+update the weight of each observation, here the vote is the value for each p.learner, when applied in predict.table, it should be applied to the param it belongs to
+```{r}
+update_weight <- function(old_weight, ev.table, predict.table){
+  vote <- full_join(predict.table, ev.table, by = "param")$vote
+  new_weight <- old_weight*exp(vote*(predict.table$pred != predict.table$obs))
+  return(new_weight)
+}
+
+#ee <- error(w, pr.svm$pred, pr.svm$obs)
+#pr.svm %>% group_by(param) %>% summarise(err = error(pred, obs))
+# ww <- rep(1/1450, 1450)
+# new <- update_weight(ww, vv, pp)
+```
+normalize the weight for each class of learner
+```{r}
+
+normalize_part_weight <- function(total.weight, n){
+  len <- length(total.weight)/n
+  nor.weight <- c()
+  for(i in 1:n){
+    nor.weight <- append(nor.weight, total.weight[(len*i-len+1):(len*i)]/sum(total.weight[(len*i-len+1):(len*i)]))
+   #print(sum(total.weight[(len*i-len+1):(len*i)]/sum(total.weight[(len*i-len+1):(len*i)]))) 
+  }
+  return(nor.weight)
+}
+nor <- normalize_part_weight(www, 10)
+```
+generate the base learner, return its performance and prediction of base learner for each learner class
+```{r}
+#initial w
+w <- rep(1/1450, 1450)
+#this function will return evaluation result, prediction, error rate of each p.learner, new_weight after learning 
+####but only for one parameter, so not work for C5.0#####
+generate_base_learner <- function(learner.class, t.grid, controlfunction, trainset, w){
+
+  if(learner.class =="knn" | learner.class=="rpart2"){
+    base.model <- train(Class~., data = trainset, method = learner.class, metric = "ROC", preProcess = c("center","scale"), tuneGrid = t.grid, trControl = controlfunction)
+    }else{
+     base.model <- train(Class~., data = trainset, method = learner.class, metric = "ROC", preProcess = c("center","scale"), tunelength = 10, tuneGrid = t.grid, trControl = controlfunction)
+    }
+  #a data.frame includes grid.parameter, ROC, Sens, Spec, ROCSD, SensSD, SpecSD
+  model.result <- base.model$results
+
+  #a data.frame includes pred, obs, prob.M, prob.R, row.Index,C, Resample(10-fold) pred and obs can be used to calculate MCC/SENS...
+  pred.result <- change_param_name(base.model$pred)
+  #return(pred.result)
+  #a data.frame of p.learner and its error, group by parameter
+  param.ev <- pred.result %>% group_by(param) %>% summarise(err = error(pred, obs, w))
+  
+  #weight of each p.learner
+  param.ev$vote <- as.numeric(log((1-param.ev$err)/param.ev$err))
+  #return(param.ev)
+  #combine table
+  pred.result.w <- full_join(pred.result, param.ev, by = "param") 
+  #add vote(normalized) to model.result
+  model.result$vote <- param.ev$vote/sum(param.ev$vote)
+  #this new weight is 10*data, ordinarily
+  new.weight <- update_weight(w, param.ev, pred.result)
+  #normalize weight 
+  new.weight <- normalize_part_weight(new.weight, nrow(trainset))
+  return(list(rep(list(base.model), 10), rep(list(model.result),10), pred.result.w, param.ev, new.weight, model.result))
+  #the last one is for GA
+  #return(new.weight)
+}
+######test#####
+model.svml <- generate_base_learner(learner.class = "svmLinear", t.grid = svmGrid, ctrl.f, train.sonar,rep(1/1450, 1450))
+model.svml[[2]]
+```
+
+colnames(predict)
+```{r}
+#test for each learner, 
+#initial weight
+w <- rep(1/1450, 1450)
+model.svml <- generate_base_learner(learner.class = "svmLinear", t.grid = svmGrid, ctrl.f, train.sonar,w)
+model.rpart <- generate_base_learner(learner.class = "rpart2", t.grid = rpartGrid, ctrl.f, train.sonar,w)
+#model.c5 <- generate_base_learner(learner.class = "C5.0", t.grid = c5Grid, ctrl.f, train.sonar,w)
+model.knn <-generate_base_learner(learner.class = "knn", t.grid = knnGrid, ctrl.f, train.sonar,w)
+model.pls <-generate_base_learner(learner.class = "pls", t.grid = plsGrid, ctrl.f, train.sonar,w)
+pred.btree <- predict(model.btree, newdata = test.sonar)
+confusionMatrix(data = pred.btree, test.sonar$Class)
+```
+
+matthew correlation coefficient, don't know how to add in the summary function..., if cannot, just use ROC
+```{r}
+mcc <- function(predict, actual){
+  #actual/predict vector(p,n)
+  TP <- sum(actual =="p" & predict =="p")
+  TN <- sum(actual =="n" & predict =="n")
+  FP <- sum(actual == "n" & predict == "p")
+  FN <- sum(actual =="p" & predict == "n")
+  #avoid denom = 0
+  storage.mode(TP+FP) <- "numeric"
+  storage.mode(TP+FN) <- "numeric"
+  storage.mode(TN+FP) <- "numeric"
+  storage.mode(TN+FN) <- "numeric"
+  denom <- (TP+FP)*(TP+FN)*(TN+FP)*(TN+FN)
+  if(any((TP+FP)==0, (TP+FN)==0, (TN+FP)==0, (TN+FN)==0)){
+    denom <- 1
+  }
+  mcc <- ((TP*TN)-(FP*FN))/sqrt(denom)
+  return(mcc)
+}
+########test#####
+mmppk <- mcc(ppk, test.sonar$Class)
+```
+
+####original package: adaboosting for each weak learner
+```{r}
+##test for the original adaboost
+tada <- train(Class~., data = train.sonar, method = "adaboost", metric = "ROC", preProcess = c("center","scale"), tunelength = 10, trControl = ctrl.f)
+tada$results
+pred.tada <- predict(tada, newdata = test.sonar)
+confusionMatrix(data = pred.tada, test.sonar$Class)            
+```
+
+####get the grid based on the learner.c
+```{r}
+base.learner <- c("svmLinear","knn","rpart2","pls")
+#select grid for the learner.class 
+class_grid <- function(learner.class){
+    index <- which(learner.class == base.learner)
+    grid <- grid.lib[index]
+    return(grid)
+}
+yy <- class_grid("svmLinear")
+```
+###implement mixboost algorithm
+```{r}
+n.boost <- 10
+#for only one base learner, boost n.boost times
+#one learner.class will generate 10 p.learners. Total learner for one class is n.boost*10
+#return the p.learner.weight, learner.index, p.learner.ROC 
+singleboost <- function(learner.class, trainset, n.boost){
+  #create a list for storing results of weak learner in each iteration
+  p.learner <- list()
+  #each learner's weight
+  alpha <- list()
+  base.model <- list()
+  eva.result <- list()
+  pred.result <- list()
+  error.vote <- list()
+  single.eva <- list()
+  #initialize obs weight
+  w <- rep(1/(nrow(trainset)*10), (nrow(trainset)*10))
+  #select grid for the learner.class
+  grid <- as.data.frame(class_grid(learner.class))
+  
+  
+  for(i in 1:n.boost){
+    p.learner[[i]] <- generate_base_learner(learner.class, grid, ctrl.f, trainset, w)
+    base.model[[i]] <- p.learner[[i]][[1]]
+    eva.result[[i]] <- p.learner[[i]][[2]]
+    pred.result[[i]] <- p.learner[[i]][[3]]
+    error.vote[[i]] <- p.learner[[i]][[4]]
+    new_weight <- p.learner[[i]][[5]]
+    single.eva[[i]] <- p.learner[[i]][[6]]
+    alpha[[i]] <- error.vote[[i]]$vote
+    w <- new_weight
+  }
+  return(list(base.model, eva.result, pred.result, alpha, single.eva))#last one for GA
+}
+######test###########
+kkk <- singleboost("knn", train.sonar, 2)
+ppk <- predict(kkk[[1]][[1]][[1]], newdata = test.sonar)
+ppk.prob <- predict(kkk[[1]][[1]][[1]], newdata = test.sonar, type = "prob")
+caret::confusionMatrix(data = ppk, test.sonar$Class, positive = "p")
+
+sss <- singleboost("svmLinear", train.sonar,2)
+pps <- predict(sss[[1]][[1]], newdata = test.sonar)
+caret::confusionMatrix(data = pps, test.sonar$Class, positive = "p")
+rrr <- singleboost("rpart2", train.sonar,2)
+ppp <- singleboost("pls", train.sonar,2)
+
+pp <- singleboost("")
+```
+
+##MixBoost
+all the thing done is to get the model, weight, ROC of each p.learner, so as to get basic component for GA algorithm.
+####combine p.learners
+```{r}
+combine_model <- function(sss,kkk, rrr, ppp){
+  total.model <- list()
+  for(j in 1:length(kkk[[1]])){
+      for(i in 1:length(kkk[[1]][[1]])){
+          total.model <- append(total.model, c(list(sss[[1]][[j]][[i]]),  list(kkk[[1]][[j]][[i]]), list(rrr[[1]][[j]][[i]]), list(ppp[[1]][[j]][[i]])))
+       }
+  }
+  return(total.model)
+}
+#####test####
+rrq <- combine_model(kkk,sss)
+```
+####combine weight of p.leaner
+```{r}
+combine_weight <- function(sss,kkk, rrr, ppp){
+  total.weight <- list()
+  for(j in 1:length(kkk[[2]])){
+      for(i in 1:length(kkk[[2]][[1]])){
+          total.weight <- append(total.weight, c(list(sss[[2]][[j]][[i]]),  list(kkk[[2]][[j]][[i]]), list(rrr[[2]][[j]][[i]]), list(ppp[[2]][[j]][[i]])))
+       }
+  }
+  return(total.weight)
+}
+
+
+```
+####get the component of mixboost
+```{r}
+#since the name of label has already be changed to "Class", and take all the feature into model, don't need input formula. 
+MixBoost_component <- function(data = trainset, n.boost){
+    #get the p.learner model,
+    svm.t <- singleboost("svmLinear", data, n.boost)
+    knn.t <- singleboost("knn", data, n.boost)
+    rpart.t <- singleboost("rpart2", data, n.boost)
+    pls.t <- singleboost("pls", data, n.boost)
+    total.model <- list()
+    #total model
+    total.model <- combine_model(svm.t, knn.t, rpart.t, pls.t)
+    #single weight
+    single.eva <- c(svm.t[[5]], knn.t[[5]], rpart.t[[5]], pls.t[[5]])
+    #total evalution
+    total.eva <- combine_weight(svm.t, knn.t, rpart.t, pls.t)
+    #model prediction
+    total.model.prediction <- c(svm.t[[3]],knn.t[[3]], rpart.t[[3]], pls.t[[3]] )
+  return(list(total.model, total.eva, single.eva, total.model.prediction))#the third one is for GA
+}
+
+mm <- MixBoost_component(data = train.sonar, 2)
+mm5 <- MixBoost_component(data = train.sonar, 5)
+cc <- MixBoost_component(data = train.cancer, 2)
+tt <- MixBoost_component(data = train.pima, 2)#the component for pls is 9, only for pima data
+ss <- MixBoost_component(data = train.simu,2)
+```
+
+So far, we generated an individual of Ts=4xn.boostxn.param p.learners, a set of their weights(vote), and the performance(ROC/Sen/MCC).
+Next randomly generated a population of N individuals.
+p.learners are randomly chosen fot the initial population of individuals.(X={0,1} as whether chosen or not)
+
+The fitness function is f(s) =mean(EVA) - b*Ts/MaxT
+we want to maximize it, Ts is # of individuals, MaxT is what we want in the final model.
+
+##apply GA to select optimal base model combination
+1.generate a data frame of p.learner
+```{r}
+
+#learner index
+generate_individual <- function(total.eva, total.pred){
+    p.learner <- length(total.eva)*nrow(total.eva[[1]])
+    roc <- c()
+    mcc <- c()
+    weight <- c()
+    for(i in 1:length(total.eva)){
+        roc <- append(roc, total.eva[[i]]$ROC)
+        #eva.sen <- append(total.eva[[i]]$Sens)
+        #eva.spec <- append(totla.eva[[i]]$spec)
+        #mcc <- append(mcc, mcc(total.pred[[i]]$pred, total.pred[[i]]$obs) )
+        weight <- append(weight, total.eva[[i]]$vote)
+    }
+    individual <- cbind(individual=c(1:p.learner), roc, weight, mcc)
+}
+eva.roc <- as.data.frame(generate_individual(mm[[3]], mm[[4]]))
+eva.roc5 <- as.data.frame(generate_individual(mm5[[3]], mm[[4]]))
+eva.c <- as.data.frame(generate_individual(cc[[3]], cc[[4]]))
+```
+2.fitness function
+```{r}
+#the maximum learner in the final model
+maxT <- 20
+b = 1/10# the legnth of MixBoost_compo
+#x is the representation of an individual in GA and its mappling into the corresponding base classifiers for combination.
+
+gafunction <- function(evaroc, nm=nrow(evaroc)){
+  #nm is how many p.learners (40*n.boost), also the nrow of evaroc
+    #fitness function 
+    avg <- function(x){
+      x <-as.vector(x)
+      return(mean(x*evaroc$roc))}
+    cost <- function(x){
+      x<- as.vector(x)
+      return(x%*%evaroc$weight - 1/10*sum(evaroc$weight))}
+    #cost(xx)
+   fitness2 <- function(x){
+      f <- avg(x)
+     penalty2 <- max(cost(x),0)
+     f - penalty2
+   }
+gaControl("binary"=list(crossover = "gabin_spCrossover"))
+   ga.model<- ga(type = "binary", fitness = fitness2, nBits= nm, popSize = nm*4, maxiter = 1000, run= 200, elitism = 0.1, keepBest = TRUE, seed=123, pcrossover = 0.9, pmutation = 0.01)
+   plot(ga.model)
+   #get the reduced p.learner size
+   ga.selection <- ga.model@solution
+   return(ga.selection)
+}
+ga.s <- gafunction(eva.roc)
+ga.s.5 <- gafunction(eva.roc5)
+ga.c <- gafunction(eva.c)
+```
+
+3.GA search
+original parameter of GA is lr-selection, single point crossover, random uniform mutation, elitism = 0.1, Pmutation = 0.1, Pxover = 0.8
+```{r}
+#for eva
+avg <- function(x){
+      x <-as.vector(x)
+      return(mean(x*eva.c$roc))}
+    cost <- function(x){
+      x<- as.vector(x)
+      return(x%*%eva.c$weight - 1/10*sum(eva.c$weight))}
+    #cost(xx)
+fitness2 <- function(x){
+      f <- avg(x)
+     penalty2 <- max(cost(x),0)
+     f - penalty2
+}
+
+gaControl("binary"=list(crossover = "gabin_spCrossover"))
+model.test<- ga(type = "binary", fitness = fitness2, nBits= 80, popSize = 480, maxiter = 1000, run= 200, elitism = 0.1, keepBest = TRUE, seed=123, monitor = TRUE)
+ga.s <- model.test@solution
+ga.s
+sum(ga.s)
+plot(model.test)
+
+
+```
+Set selection type, elitism, type of mutation and crossover as controlled, and only tuning type of xover(uniform, single point),Pm, Px
+1.single point
+```{r}
+pcpm <- read.csv("pcpm.csv", header = TRUE)
+#result tables
+
+#list of output of 4 dataset
+
+#result of one trial of each dataset
+xofunction <- function(evaroc){
+  gaControl("binary"=list(crossover = "gabin_spsuCrossover"))
+  ite.sp.xo <- c()
+fit.sp.xo <- list()
+fitvalue.sp.xo <- c()
+solution.sp.xo <- list()
+  out.sp<- data.frame()
+  type.s <- rep("sp", 25)
+  ROCvalue <- c()
+  for(i in 1:length(pcpm[,1])){
+    pxover = pcpm[i,4]
+    pmut = pcpm[i,5]
+    model.xm<- ga(type = "binary", fitness = fitness2, nBits = 80, popSize = 200, maxiter = 1000, run = 400, pcrossover = pxover, pmutation = pmut, seed=123)
+    #get the output plot
+    # ite.sp.xo[i] <- model.xm@iter
+    # fitvalue.sp.xo[i] <- model.xm@fitnessValue
+    # fit.sp.xo[[i]] <- model.xm@fitness
+    solution.sp.xo[[i]] <- model.xm@solution[1,]
+    ROCvalue <- c(ROCvalue, solution.sp.xo[[i]]%*%evaroc$roc)
+    #print(ROCvalue)
+    aa<- data.frame(trial = i, pxover, pmutation = pmut, iteration = model.xm@iter)
+    out.sp <- rbind(out.sp, aa)
+  }
+  out.sp <- cbind(out.sp,ROCvalue, type.s)
+  #return(list(out.sp, solution.sp.xo))
+  return(out.sp)
+}
+type.s <- rep("sp", 25)
+out.xm<- xofunction(eva.roc$roc)
+out.xm.p <- cbind(out.xm[[1]], type.s)
+colnames(out.xm.p) <- c("trial","pxover", "pmutation", "iteration", "ROCvalue","type")
+cancer.sp <- xofunction(eva.c)
+cancer.u <- ufunction(eva.c)
+
+plotga <- function(evaroc){
+  #sp
+  type.s <- rep("sp", 25)
+  out.xm.p <- xofunction(evac$roc)
+  #out.xm.p <- cbind(out.xm.p[[1]], type.s)
+  #colnames(out.xm.p) <- c("trial","pxover", "pmutation", "iteration", "ROCvalue","type")
+  #uniform
+  type.u <- rep("uniform", 25)
+  out.um <- ufunction(evaroc$roc)
+  #out.um <-cbind(out.um[[1]], type.u)
+  #colnames(out.um) <- c("trial","pxover", "pmutation", "iteration", "ROCvalue","type")
+  return(list(out.xm.p, out.um))
+  #melt and plot
+#   comb <- data.frame(trial = 1:25, Single_point_crossover = out.xm.p$iteration, Uniform_crossover = out.um$iteration)
+# cmelt <- melt(comb, id.vars = "trial", variable.name = "type")
+#  comsp.u <- cmelt %>% ggplot(aes(trial, value))+geom_line(aes(color = type), size = 1) +geom_point(aes(color=type),size = 2)+ ylab("generation") + ggtitle("Number of generation of sp/u crossover with different Pm/Pc
+# Sonar dataset")+ labs(col="crossover type")
+#  return(comsp.u)  
+}
+
+cancer.ga <- plotga(eva.c)
+cancer.gt <- cbind(cancer.ga[[1]]$i, )
+
+
+combinexu <- cbind(out.xm.p$trial,out.xm.p$pxover, out.xm.p$pmutation, out.xm.p$iteration, out.xm.p$ROCvalue, out.um$iteration, out.um$ROCvalue)
+colnames(combinexu) <- c("trial","pxover", "pmutation", "SP_iteration", "SP_ROCvalue","U_iteration", "U_ROCvalue")
+write.csv(combinexu, file = "sonar_spu.csv")
+
+spuu <- data.frame(trial = 1:25, Sp_ROC = out.xm.p$ROCvalue, U_ROC = out.um$ROCvalue)
+ spuumelt <- melt(spuu, id.vars = "trial", variable.name = "type")
+  spuumelt.plot <- spuumelt %>% ggplot(aes(trial, value))+geom_line(aes(color = type), size = 1) +geom_point(aes(color=type),size = 2)+ ylab("ROC value") + ggtitle("ROC value for different type of crossover in Pm/Pc Sonar dataset")+ labs(col="crossover type")
+spuumelt.plot
+combinexu <- as.data.frame(combinexu)
+by_pm_iter <- combinexu%>%group_by(combinexu$pxover) %>% 
+  summarise(
+    avg.iter.sp = mean(SP_iteration),
+    avg.iter.u = mean(U_iteration),
+    avg.roc.sp = mean(SP_ROCvalue),
+    avg.roc.u = mean(U_ROCvalue)
+    )
+
+group_by(combinexu, pxover) %>%summarize(mean = mean(SP_iteration))
+
+sonar.pc <- plotga(eva.roc)
+sonar.pc.5 <- plotga(eva.roc5)
+```
+2.Uniform crossover
+```{r}
+ufunction <- function(evaroc){
+  ite.u.xo <- c()
+fit.u.xo <- list()
+fitvalue.u.xo <- c()
+solution.u.xo <- list()
+type.u <- rep("uniform", 25)
+gaControl("binary"=list(crossover = "gabin_uCrossover"))
+  out.u <- data.frame()
+  for(i in 1:length(pcpm[,1])){
+    pxover = pcpm[i,4]
+    pmut = pcpm[i,5]
+    model.um<- ga(type = "binary", fitness = fitness2, nBits = 80, popSize = 200, maxiter = 1000, run = 400, pcrossover = pxover, pmutation = pmut, seed=123)
+    #get the output plot
+    # plot(model.2.3)
+    # plot(model.2.3@fitness)
+     ite.u.xo[i] <- model.um@iter
+    # fit.u.xo[[i]] <- model.um@fitness
+    # fitvalue.u.xo <- model.um@fitnessValue
+     solution.u.xo[[i]] <- model.um@solution[1,]
+    #output result
+  bb <- data.frame(trial = i, pxover, pmutation = pmut, iteration = model.xm@iter, ROCvalue = solution.u.xo%*%evaroc)
+  out.u <- rbind(out.u, bb)
+  }
+  out.u <- cbind(out.u, type.u)
+  return(out.u)
+}
+#sonar
+type.u <- rep("uniform", 25)
+out.um <- ufunction(eva.roc$roc)
+out.um <- cbind(out.um[[1]],type.u)
+
+
+colnames(out.um) <- c("trial","pxover", "pmutation", "iteration", "ROCvalue","type")
+
+```
+
+```{r}
+library(reshape2)
+#generation comparison
+comb <- data.frame(trial = 1:25, Single_point_crossover = out.xm.p$iteration, Uniform_crossover = out.um$iteration)
+cmelt <- melt(comb, id.vars = "trial", variable.name = "type")
+ cmelt %>% ggplot(aes(trial, value))+geom_line(aes(color = type), size = 1) +geom_point(aes(color=type),size = 2)+ ylab("generation") + ggtitle("Number of generation of sp/u crossover with different Pm/Pc
+Sonar dataset")+ labs(col="crossover type")
+#21xm  pm =0.02, px = 0.8
+#2 um pm =0.02, px =0.8
+```
+3.Crossover rate + mutation rate
+#######################################
+###############predict#################
+```{r}
+predict_mixboost <- function(mixboost, selected.model, test.data){
+  model.list <- mixboost[[1]]
+  mix.weight <- mixboost[[2]]
+  out.result <- c()
+  weight <- c()
+  #get the selected model from ga.result
+  model.prep <- model.list[selected.model>0]
+  
+   for(i in 1:(length(mix.weight)/10)){
+     weight <- append(weight, mix.weight[[i*10]]$vote)
+     out <- predict(model.list[[i]], newdata = test.data, type = "prob")
+     colnames(out)[1] <- paste("n_",i)
+     colnames(out)[2] <- paste("p_",i)
+     out.result <- append(out.result, out)
+   }
+  out.result <- as.data.frame(out.result)
+  #return(weight)this weight is for all the p.learner
+  #return(list(out.result, model.prep))#!!checked correct!!
+     weight.selected <- selected.model*weight
+     #get the weights of selected models and normalized
+     weight.selected <- weight.selected[weight.selected>0]/sum(weight.selected[weight.selected>0])
+     #return(weight.selected) #sum(weight.selected)=1
+    #apply each selected p.learner with its own weight
+     for(i in 1:8){
+       out.result[,c((2*i-1),(2*i))] <- out.result[,c((2*i-1),(2*i))]*weight.selected[i]
+      print(out.result)
+     }
+#prediction
+    negative <- rowSums(out.result[, !is.na(str_extract(colnames(out.result), "^n"))])
+    positive <- rowSums(out.result[, !is.na(str_extract(colnames(out.result), "^p"))])
+    final <- as.data.frame(cbind(negative, positive))
+    #return(final)     
+    final.prediction <- ifelse(final$positive>=0.5,"p", "n")
+
+    return(list(out.result, model.prep, final.prediction, weight.selected))
+   #  return(list(weight.selected, final.prediction))
+}
+oo <- predict_mixboost(mm, ga.s, test.sonar)
+oo5 <- predict_mixboost(mm5, ga.s.5, test.sonar)
+cco <- predict_mixboost(cc, ga.c, test.cancer)
+caret::confusionMatrix(data = oo[[3]], test.sonar$Class, positive = "p")
+
+
+
+
+ for(i in 1:length(model.prep)){
+       out.result[,c((2*i-1),(2*i))] <- out.result[,c((2*i-1),(2*i))]*weight.selected[i]
+      
+     }
+
+```
+#extract the final solution##
+```{r}
+final_solution <- function(predict.result, selected.model){
+  p.name <- c()
+  model.index <- which(selected.model>0)
+  for (i in 1:length(predict.result[[2]])){
+    p.name <- c(p.name, predict.result[[2]][[i]]$method)
+  }
+
+  final_model <- rbind(index = model.index, p.learner = p.name, weight = predict.result[[4]])
+}
+sonar.final <- final_solution(oo, ga.s)
+cancer.final <- final_solution(cco, ga.s)
+```
+
+#############################################
+####evaluate the performance of each model###
+```{r}
+evaluation <- function(pred, actual){
+  if(!(is.vector(pred)&is.vector(actual))){
+    pred <- as.vector(pred)
+    actual <- as.vector(actual)
+  }
+  TP <- sum(actual =="p" & predict =="p")
+  TN <- sum(actual =="n" & predict =="n")
+  FP <- sum(actual == "n" & predict =="p")
+  FN <- sum(actual =="p" & predict =="n")
+  #precision
+  precision <- TP/(TP+FP)
+  #recall
+  recall <- TP/(TP+FN)
+  #Specificity
+  specificity <- TN/(TN+FP)
+  #F_measure
+  F_score <- 2*precision*recall/(precision+recall)
+  return(list(precision, recall, specificity, F_score))
+}
+eppk <- as.data.frame(evaluation(ppk, test.sonar$Class))
+```
+
+###total algorithm
+```{r}
+  
+my_boost <- function(train, test, n.boost){
+  #initial weight
+   w <- rep(1/(nrow(train)*10), nrow(train)*10)
+   #get the solution population
+   #model.kkk <- generate_base_learner(learner.class = "knn", t.grid = knnGrid, ctrl.f, train.sonar,w)
+   #kkk <- singleboost("knn", train.sonar, 2)
+   mix.boost <- MixBoost_component(data= train, n.boost)
+   #generate a data frame for GA selction
+   eva.roc <- as.data.frame(generate_individual(mix.boost[[2]], mix.boost[[3]]))
+   #return(eva.roc)
+   #do GA selection
+   ga.selection <- gafunction(eva.roc, nrow(eva.roc))
+   #prediction
+   predict.result <- predict_mixboost(mix.boost, ga.selection, test)
+   model.result <- final_solution(predict.result, ga.selection)
+   confusion <- confusionMatrix(data = predict.result[[3]], test$Class, positive = "p")
+   #prediction[[2]]is the final modelset,[[3]]is the final prediction, confusion is the confusionmatrix
+   return(list(predict.result[[2]], predict.result[[3]], confusion, model.result))
+   #return(ga.selection)
+}
+
+sonar.try <- my_boost(train.sonar, test.sonar, 2)
+confusion.sonar <- confusionMatrix(data = oo[[3]], test.sonar$Class, positive = "p")
+confusion.cancer <- confusionMatrix(data = cco[[3]], test.cancer$Class, positive = "p")
+cancer.try <- my_boost(train.cancer, test.cancer,2)
+
+```
+
+Compare for Sonar
+```{r}
+
+sonar.col.name <- c( "GAMixBoost", "knn", "rpart", "pls", "svm", "random forest", "AdaBoost")
+byclass.table <- cbind(confusion.sonar$byClass, sck$byClass, scr$byClass, sc$byClass, scv$byClass, sonar.rf.cm$byClass, sonar.ada.cm$byClass)
+colnames(byclass.table) <- sonar.col.name
+#write.csv(byclass.table, "sonar_byclass.csv")
+overall.table <- cbind(confusion.sonar$overall, sck$overall, scr$overall, sc$overall, scv$overall,sonar.rf.cm$overall, sonar.ada.cm$overall)
+colnames(overall.table) <- sonar.col.name
+#write.csv(overall.table, "sonar_overall.csv")
+
+#plot
+byclass.table <- as.data.frame(t(byclass.table))
+byclass.table$model <- rownames(byclass.table)
+#melt
+library(reshape2)
+bymelt <- melt(byclass.table, id.vars = "model", measure.vars = c("Sensitivity", "Specificity", "Precision", "Recall"))
+p <- ggplot(bymelt, aes(x=model, y = value, fill = variable)) + geom_bar(stat = "identity", position = "dodge", alpha = 2/3) + guides(fill = guide_legend(title = "Measurements"))+ geom_text(aes(label = round(value,2)), size = 3) + xlab("Classifier")
+p
+#, color = variable
+bymelt2 <- melt(byclass.table, id.vars = "model", measure.vars = c("F1", "Detection Rate", "Balanced Accuracy"))
+p2 <- ggplot(bymelt2, aes(x=model, y = value, fill = variable)) + geom_bar(stat = "identity", position = "dodge", alpha = 2/3) + guides(fill = guide_legend(title = "Measurements"))+ geom_text(aes(label = round(value,2)), size = 3) + xlab("Classifier")
+p2
+
+#overall
+overall.table <- as.data.frame(t(overall.table))
+overall.table$model <- rownames(overall.table)
+overmelt <- melt(overall.table, id.vars = "model", measure.vars = c("Accuracy", "Kappa"))
+po <- ggplot(overmelt, aes(x=model, y = value, fill = variable)) + geom_bar(stat = "identity", position = "dodge", alpha = 2/3) + guides(fill = guide_legend(title = "Measurements"))+ geom_text(aes(label = round(value,3)), size = 3) + xlab("Classifier")
+po
+#, color = variable
+bymelt2 <- melt(byclass.table, id.vars = "model", measure.vars = c("F1", "Detection Rate", "Balanced Accuracy"))
+p2 <- ggplot(bymelt2, aes(x=model, y = value, fill = variable)) + geom_bar(stat = "identity", position = "dodge", alpha = 2/3) + guides(fill = guide_legend(title = "Measurements"))+ geom_text(aes(label = round(value,2)), size = 3) + xlab("Classifier")
+p2
+```
+comapre for cancer
+```{r}
+col.name <- c( "GAMixBoost", "knn", "rpart", "pls", "svm", "random forest", "AdaBoost")
+byclass.table2 <- cbind(confusion.cancer$byClass, sckc$byClass, scrc$byClass, scc$byClass, scvc$byClass, cancer.rf.cm$byClass, cancer.ada.cm$byClass)
+colnames(byclass.table2) <- col.name
+write.csv(byclass.table2, "cancer_byclass.csv")
+overall.table2 <- cbind(confusion.cancer$overall, sckc$overall, scrc$overall, scc$overall, scvc$overall,cancer.rf.cm$overall, cancer.ada.cm$overall)
+colnames(overall.table2) <- col.name
+write.csv(overall.table2, "cancer_overall.csv")
+
+#plot
+byclass.table2 <- as.data.frame(t(byclass.table2))
+byclass.table2$model <- rownames(byclass.table2)
+#melt
+bymeltc2 <- melt(byclass.table2, id.vars = "model", measure.vars = c("Sensitivity", "Specificity", "Precision", "Recall"))
+pc <- ggplot(bymeltc2, aes(x=model, y = value, fill = variable)) + geom_bar(stat = "identity", position = "dodge", alpha = 2/3) + guides(fill = guide_legend(title = "Measurements"))+ geom_text(aes(label = round(value,2)), size = 3) + xlab("Classifier")
+pc
+#, color = variable
+bymeltc22 <- melt(byclass.table2, id.vars = "model", measure.vars = c("F1", "Detection Rate", "Balanced Accuracy"))
+pc2 <- ggplot(bymeltc22, aes(x=model, y = value, fill = variable)) + geom_bar(stat = "identity", position = "dodge", alpha = 2/3) + guides(fill = guide_legend(title = "Measurements"))+ geom_text(aes(label = round(value,2)), size = 3) + xlab("Classifier")
+pc2
+
+#overall
+overall.table2 <- as.data.frame(t(overall.table2))
+overall.table2$model <- rownames(overall.table2)
+overmelt2 <- melt(overall.table2, id.vars = "model", measure.vars = c("Accuracy", "Kappa"))
+po2 <- ggplot(overmelt2, aes(x=model, y = value, fill = variable)) + geom_bar(stat = "identity", position = "dodge", alpha = 2/3) + guides(fill = guide_legend(title = "Measurements"))+ geom_text(aes(label = round(value,3)), size = 3) + xlab("Classifier")
+po2
+```
+compare for pima
+```{r}
+col.name <- c( "GAMixBoost", "knn", "rpart", "pls", "svm", "random forest", "AdaBoost")
+byclass.table3 <- cbind(confusion.pima$byClass, sckp$byClass, scrp$byClass, sc$byClass, scv$byClass, pima.rf.cm$byClass, pima.ada.cm$byClass)
+colnames(byclass.table3) <- col.name
+write.csv(byclass.table3, "pima_byclass.csv")
+overall.table3 <- cbind(confusion.pima$overall, sckp$overall, scrp$overall, scp$overall, scvp$overall,pima.rf.cm$overall, pima.ada.cm$overall)
+colnames(overall.table3) <- col.name
+write.csv(overall.table3, "pima_overall.csv")
+
+#plot
+byclass.table3 <- as.data.frame(t(byclass.table3))
+byclass.table3$model <- rownames(byclass.table3)
+#melt
+bymeltc3<- melt(byclass.table3, id.vars = "model", measure.vars = c("Sensitivity", "Specificity", "Precision", "Recall"))
+pcp <- ggplot(bymeltc3, aes(x=model, y = value, fill = variable)) + geom_bar(stat = "identity", position = "dodge", alpha = 2/3) + guides(fill = guide_legend(title = "Measurements"))+ geom_text(aes(label = round(value,2)), size = 3) + xlab("Classifier")
+pcp
+#, color = variable
+bymeltc23 <- melt(byclass.table3, id.vars = "model", measure.vars = c("F1", "Detection Rate", "Balanced Accuracy"))
+pcp2 <- ggplot(bymeltc23, aes(x=model, y = value, fill = variable)) + geom_bar(stat = "identity", position = "dodge", alpha = 2/3) + guides(fill = guide_legend(title = "Measurements"))+ geom_text(aes(label = round(value,2)), size = 3) + xlab("Classifier")
+pcp2
+
+#overall
+overall.table3 <- as.data.frame(t(overall.table3))
+overall.table3$model <- rownames(overall.table3)
+overmelt3 <- melt(overall.table3, id.vars = "model", measure.vars = c("Accuracy", "Kappa"))
+pop2 <- ggplot(overmelt2, aes(x=model, y = value, fill = variable)) + geom_bar(stat = "identity", position = "dodge", alpha = 2/3) + guides(fill = guide_legend(title = "Measurements"))+ geom_text(aes(label = round(value,3)), size = 3) + xlab("Classifier")
+pop2
+
+
+```
+
+
+################################################
+################################################
+###Final Test###############
+####1.Sonar data
+```{r}
+data("Sonar")
+Sonar <- pndata(Sonar, "M")
+train.sonar <- separate(Sonar)[[1]]
+test.sonar <- separate(Sonar)[[2]]
+sonar.try.2 <- my_boost(train.sonar, test.sonar, 2)
+sonar.try.2[[3]]$overall
+#test with different iteration time
+iter <- c(2, 5, 10)
+sonar.try.5 <- my_boost(train.sonar, test.sonar, 5)
+sonar.try.5[[3]]$overall
+sonar.try.10 <- my_boost(train.sonar, test.sonar, 10)
+sonar.try.10[[3]]$overall
+
+#try random forest
+sonar.model.rf <- train(Class~., data = train.sonar, method = "rf", metric = "ROC", preProcess = c("center", "scale"), trControl = ctrl.f)
+sonar.pred.rf <- predict(sonar.model.rf, newdata = test.sonar)
+sonar.rf.cm <- confusionMatrix(data = sonar.pred.rf, test.sonar$Class, positive = "p")
+#0.84
+
+#try adaboost
+sonar.model.ada <- train(Class~., data=train.sonar, method = "ada", metric ="ROC", preProcess = c("center", "scale"), trControl = ctrl.f)
+sonar.pred.ada <- predict(sonar.model.ada, newdata = test.sonar)
+sonar.ada.cm <- confusionMatrix(data = sonar.pred.ada, test.sonar$Class, positive = "p")
+#time consuming
+#accu = 0.8889
+compare_result <- function(my, rf, ada){
+  overall <- c()
+  byClass <- c()
+    overall <- rbind(overall, my[[3]], rf[[3]], ada[[3]])
+    byClass <- rbind(byClass, my[[4]], rf[[4]], ada[[4]])
+    return(list(overall, byClass))
+}
+sonar.compare <- compare_result(sonar.try.2[[3]], sonar.rf.cm, sonar.ada.cm)
+
+```
+
+```{r}
+#try different dataset with my_boost, rf, ada
+dataset <- list(train.sonar = train.sonar, test.sonar = test.sonar, train.cancer = train.cancer, test.cancer = test.cancer, train.pima = train.pima, test.pima = test.pima)
+datasetname <- c("train.sonar", "test.sonar", "train.cancer", "test.cancer", "train.pima", "test.pima")
+class <- c("rf", "ada")
+compare <- function(data){
+  #get train/test data 
+  train.name <- datasetname[!is.na(str_extract(datasetname, "sonar$"))][1]
+  train <- dataset[which(train.name == names(dataset))]
+  test.name <- datasetname[!is.na(str_extract(datasetname, "sonar$"))][2]
+  test <- dataset[which(test.name == names(dataset))]
+  return(list(train,test))
+  #my <- my_boost(train, test, 2)
+  #return(my)
+  models <- list()
+  preds <- list()
+  cms <- list()
+  overall <- c()
+  byClass <- c()
+   for( i in 1:2){
+    models[[i]] <- train(Class~., data = train, method = class[i], metric = "ROC", preProcess = c("center", "scale"), trControl = ctrl.f)
+   preds[[i]] <- predict(models[[i]], newdata = test)
+   cms[[i]] <- confusionMatrix(data = preds[[i]], test$Class, positive = "p")
+   overall <- cbind(overall, cms[[i]]$overall)
+   byClass <- cbind(byClass, cms[[i]]$byClass)
+   }
+  model.ada<- train(Class~., data = train, method = "ada", metric = "ROC", preProcess = c("center", "scale"), trControl = ctrl.f)
+  pred.ada <- predict(model.ada, newdata = test)
+  ada.cm <- confusionMatrix(data = pred.ada, test$Class, positive = "p")
+  #return(ada.cm)
+  return(list(overall, byClass))
+}
+
+```
+2.try cancer
+```{r}
+#prepare dataset
+cancer <- read.csv("wisconsin_breast_cancer.csv", header = T, stringsAsFactors = F)
+cancer$Class <- cancer$diagnosis
+cancer <- cancer[,-c(1,2,(ncol(cancer)-1))]
+cancer <- pndata(cancer, "M")
+train.cancer <- separate(cancer)[[1]]
+test.cancer <- separate(cancer)[[2]]
+cancer.try.2 <- my_boost(train.cancer, test.cancer, 2)
+#try random forest
+cancer.model.rf <- train(Class~., data = train.cancer, method = "rf", metric = "ROC", preProcess = c("center", "scale"), trControl = ctrl.f)
+cancer.pred.rf <- predict(cancer.model.rf, newdata = test.cancer)
+cancer.rf.cm <- confusionMatrix(data = cancer.pred.rf, test.cancer$Class, positive = "p")
+#0.94
+#try adaboost
+cancer.model.ada <- train(Class~., data=train.cancer, method = "ada", metric ="ROC", preProcess = c("center", "scale"), trControl = ctrl.f)
+cancer.pred.ada <- predict(cancer.model.ada, newdata = test.cancer)
+cancer.ada.cm <- confusionMatrix(data = cancer.pred.ada, test.cancer$Class, positive = "p")
+cancer.compare <- compare_result(cancer.try.2[[3]], cancer.rf.cm, cancer.ada.cm)
+```
+3. try pima
+```{r}
+pima <- read.csv("pima_diabetes.csv", header = T, stringsAsFactors = F)
+# table(pima$Outcome)
+#   0   1 
+# 500 268 
+pima <- pndata(pima, "1")
+train.pima <- separate(pima)[[1]]
+test.pima <- separate(pima)[[2]]
+pima.try <- my_boost(train.pima, test.pima,2)
+#try random forest
+pima.model.rf <- train(Class~., data = train.pima, method = "rf", metric = "ROC", preProcess = c("center", "scale"), trControl = ctrl.f)
+pima.pred.rf <- predict(pima.model.rf, newdata = test.pima)
+pima.rf.cm <- confusionMatrix(data = pima.pred.rf, test.pima$Class, positive = "p")
+
+#try adaboost
+pima.model.ada <- train(Class~., data=train.pima, method = "ada", metric ="ROC", preProcess = c("center", "scale"), trControl = ctrl.f)
+pima.pred.ada <- predict(pima.model.ada, newdata = test.pima)
+pima.ada.cm <- confusionMatrix(data = pima.pred.ada, test.pima$Class, positive = "p")
+pima.compare <- compare_result(pima.try.2[[3]], pima.rf.cm, pima.ada.cm)
+```
+simulated data
+```{r}
+tcs <- twoClassSim(n=1000, noiseVars = 20, corrVars = 10)
+table(tcs$Class)
+
+simu <- pndata(tcs, "1")
+train.simu<- separate(simu)[[1]]
+test.simu <- separate(simu)[[2]]
+#try random forest
+simu.model.rf <- train(Class~., data = train.simu, method = "rf", metric = "ROC", preProcess = c("center", "scale"), trControl = ctrl.f)
+simu.pred.rf <- predict(simu.model.rf, newdata = test.simu)
+simu.rf.cm <- confusionMatrix(data = simu.pred.rf, test.simu$Class, positive = "p")
+
+#try adaboost
+simu.model.ada <- train(Class~., data=train.simu, method = "ada", metric ="ROC", preProcess = c("center", "scale"), trControl = ctrl.f)
+simu.pred.ada <- predict(pima.model.ada, newdata = test.simu)
+simu.ada.cm <- confusionMatrix(data = pima.pred.ada, test.pima$Class, positive = "p")
+
+```
+
