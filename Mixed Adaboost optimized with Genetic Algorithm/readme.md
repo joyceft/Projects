@@ -4,6 +4,8 @@ of mixed weak learners in Adaboost model.
 
 This idea is inspired by Knapsack Problem. Each weak learner in the final model is like one item in the bag, with its own value and weight, the goal is to applying Genetic Algorithm to find the best combination of items to maximize the total value of the bag within the limitation of bag capacity. Here for my project is: apply Genetic Algorithm to find the best combination of weak learners to maximize the final model's preformance with the restriction of the number of weak learners. In that case, the preformance of final model is not hurt by reducing the model complexity in binary classification problems.
 
+My model is named as **GAMixBoost**.
+
 ## Languages and Packages
 R; 
 
@@ -13,6 +15,7 @@ This self-written maching learning prediction model is tested on 3 datasets:
 - Wisconsin Breast Cancer
 - Pima Indians Diabetes
 - Sonar
+
 Which can be all found in [UCI Machine Learning Repository](http://archive.ics.uci.edu/ml/index.php)
 
 ## Steps
@@ -33,7 +36,7 @@ After done Adaboost learning, a solution space is generated for GA to do global 
 Using Classification Performance: Accuracy, Sensitivity, Specificity and Precision, Recall, F-1, etc on GAMixBoost, 
 basic weak learner 
 
-4.Comparing final results with existed ensemble models
-Compared prediction results with Random Forest, Adaboost,  
+5.Comparing final results with existed ensemble models
+Compared prediction results of GAMixBoost, KNN, RPART, PLS, SVMLinear, Random Forest and Adaboost on these three datasets.  
 
 
