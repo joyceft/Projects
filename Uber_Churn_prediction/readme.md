@@ -1,4 +1,5 @@
-# Uber is interested in predicting rider retention. To help explore this question, they have provided a sample dataset of a cohort of users who signed up for an account in January 2014. The data was pulled several months later.
+### Uber Rider Case Study
+Analayszed records of 6 month from Jan 2014 to July 2014 of Uber Rider, interested in predicting rider retention. To help explore this question, they have provided a sample dataset of a cohort of users who signed up for an account in January 2014. The data was pulled several months later.
 
 ##Dataset description
 - city: city this user signed up in
