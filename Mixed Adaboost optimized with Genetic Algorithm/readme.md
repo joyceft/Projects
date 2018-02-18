@@ -39,4 +39,4 @@ basic weak learner
 5.Comparing final results with existed ensemble models
 Compared prediction results of GAMixBoost, KNN, RPART, PLS, SVMLinear, Random Forest and Adaboost on these three datasets.  
 
-
+## Detailed and full illustrition can be seen in that pdf file.
