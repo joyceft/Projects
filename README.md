@@ -9,6 +9,8 @@ in building Linear Regression Model; Checking assumptions, giving diagnostics su
 ### Zillow House Price Prediction(R/Python):
 Including: EDA; Data Mining; Imputation; Feature Selection; Predictive Models(Random Foest, XGBoost); Tuning Parameters and Modifying models.
 
+R Shiny for visualization of transaction and geometric data.
+
 ### Instacart Online Grocery Store Customer Reorder Prediction(MySQL, R, Python)
 Including EDA, Customer Segmentation; applied Classification Model.
 
