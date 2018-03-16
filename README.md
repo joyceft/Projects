@@ -1,5 +1,10 @@
 # Projects
 Projects for Data Analysis(Campus Courses,Kaggle, BootCamp, Coursera)
+### Twitch API Analysis(Python):
+- understood project manager's requirement for finding important developer/API endpoints
+- cleaned and extracted features of daily_logs from Nov 2017 to Feb 2018, , mapped with application_metadata
+- analyzed and visualized daily_log for trends, correlationships between features
+
 ### Zillow House Price Prediction(R/Python):
 - Including: EDA; Data Mining; Imputation of Missing Data; Feature Selection; 
 - Predictive Models(Linear Regression, Random Foest, XGBoost); Tuning Parameters and Modifying models.
