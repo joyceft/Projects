@@ -250,26 +250,46 @@ bound %>%
 simulation
 ```{r}
 #generate 1000 sequences, each sequence with 20 steps
-a = 100
-b = 50
-sprt_matrix = matrix(0, nrow = a, ncol = b)
+a = 1000
+b = 20
+sprt_matrix = matrix(NA, nrow = a, ncol = b)
 stop_vector = rep(NA, a)
+sum_x = rep(NA, a)
 for(t in seq(1, a)){
+  print(paste('At', t, 'sequence'))
   i = 1
   while(i < b){
     #get the xi
-    sprt_matrix[i, t] = rnorm(1, 0.5, 1) 
-    sumxi = sum(sprt_matrix[i, t])
+    sprt_matrix[t, i] = rnorm(1, 0.5, 1) 
+    sumxi= sum(sprt_matrix[t, i])
     if(sumxi >= upper[i]){
       print(paste('Stop! at', i, 'stage, say theta = theta2'))
       stop_vector[t] = i
+      sum_x[t] = sumxi
+      break
     }else if(sumxi <= lower[i]){
       print(paste('Stop! at', i, 'stage, say theta = theta1'))
       stop_vector[t] =i
+      sum_x[t] = sumxi
+      break
     }else{
-      print(paste('Continue to', i+1, 'stage'))
+      #print(paste('Continue to', i+1, 'stage'))
       i = i+1
     }
   }
 }
+# get the percentage of stop at i stage
+print('How is the probability stop at i:')
+print(table(stop_vector)/a)
+print('The probability it will stop within some number:')
+print(sum(table(stop_vector)/a))
 ```
+
+```{r}
+library(reshape2)
+rr = data.frame('stage' = stop_vector, 'sumx' = sum_x)
+ggplot() + 
+  geom_line(data = bound, mapping = aes(x = index, y = upper), colour = '#d95f02', linetype = 1, size = 2) +
+  geom_line(data = bound, mapping = aes(x = index, y = lower), colour = '#1b9e77', linetype = 1, size = 2) +
+  geom_point(data = rr, mapping = (aes(x = stage, y = sumx))) +
+  xlab('n') + ylab('SumXi')
