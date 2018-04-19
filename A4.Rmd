@@ -1,0 +1,275 @@
+---
+title: "A4Q1"
+author: "Tianyi Fang"
+date: "April 18, 2018"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(ggplot2)
+
+```
+```{r}
+air_data = read.csv("AirCondData4WebSp2018.csv")
+#only need first and second row
+n1 = air_data$fail_n[1]
+n2 = air_data$fail_n[2]
+xbar1 = air_data$avg_hour[1]
+xbar2 = air_data$avg_hour[2]
+```
+(a)
+f(xi1|tethaj1) = exp(thetaj1)
+f(thetai|alpha, beta) = gamma(alpha, beta)
+alpha = U[a,b]
+
+```{r}
+air_test_func <- function(n, a, b){
+  #create a df to record test result
+  air_test = data.frame('alpha' = rep(NA, n), 'beta' = rep(NA,n), 'theta1'=rep(NA, n), 'theta2'=rep(NA, n), 'u' = rep(NA, n), 'r' = rep(NA, n))
+
+  #Initialize
+  air_test$theta1[1] = 1
+  air_test$theta2[1] = 1
+  air_test$alpha[1] = runif(1, a, b)
+  air_test$beta[1] = runif(1, -0.05*air_test$alpha[1] + 4, -0.05*air_test$alpha[1]+5.3)
+#iteratively generate theta1 and theta2 by MCMC
+
+  i = 2
+  while(i <= n){
+    air_test$alpha[i]= runif(1, a, b)
+    air_test$beta[i] = runif(1, -0.05*air_test$alpha[i] + 4, -0.05 * air_test$alpha[i]+5.3)
+    theta1_star = rgamma(1, shape = air_test$alpha[i], scale = air_test$beta[i])
+    theta2_star = rgamma(1, shape = air_test$alpha[i], scale = air_test$beta[i])
+    num = (1/theta1_star)^n1*(exp(-n1*(xbar1/theta1_star)))*(1/theta2_star)^n2*(exp(-n2*(xbar2/theta2_star)))
+    dem = (1/air_test$theta1[i-1])^n1*(exp(-n1*(xbar1/air_test$theta1[i-1])))*(1/air_test$theta2[i-1])^n2*(exp(-n2*(xbar2/air_test$theta2[i-1])))
+    ratio = min(num/dem, 1)
+    u = runif(1,0,1)
+    if(u < ratio){
+      #update with theta_star
+      air_test$theta1[i] = theta1_star
+      air_test$theta2[i] = theta2_star
+      #check u<r
+      air_test$r[i] = ratio
+      air_test$u[i] = u
+      i = i + 1
+    }
+  }
+  #drop burn_in
+  t_burn = 0.05*n
+  air_drop_burnin = air_test[-(1:t_burn), ]
+  n_new = nrow(air_drop_burnin)
+  #print the result
+  print(paste('avg_alpha:', mean(air_drop_burnin$alpha)))
+  print(paste('avg_beta:', mean(air_drop_burnin$beta)))
+  print(paste('avg_theta1:', mean(air_drop_burnin$theta1)))
+  print(paste('avg_theta2:', mean(air_drop_burnin$theta2)))   
+  print(paste('P(??1 ??? ??2 +10|X1, X2):', sum(air_drop_burnin$theta1-air_drop_burnin$theta2 >=10)/n_new))
+  print(paste('P(??1 ??? ??2 +20|X1, X2):', sum(air_drop_burnin$theta1-air_drop_burnin$theta2 >=20)/n_new))
+  return(air_drop_burnin)
+}
+```
+n=10000, a = 30, b = 45 for U(a,b)
+```{r}
+result1 = air_test_func(10000, 30, 45)
+```
+```{r}
+result2 = air_test_func(10000, 30, 65)
+```
+(b) alpha = 40, beta = 2.5
+```{r}
+air_test_func2 <- function(n){
+  #create a df to record test result
+  air_test = data.frame('theta1'=rep(NA, n), 'theta2'=rep(NA, n), 'u' = rep(NA, n), 'r' = rep(NA, n))
+
+  #Initialize
+  air_test$theta1[1] = 1
+  air_test$theta2[1] = 1
+  alpha = 40
+  beta = 2.5
+#iteratively generate theta1 and theta2 by MCMC
+
+  i = 2
+  while(i <= n){
+    theta1_star = rgamma(1, shape = alpha, scale = beta)
+    theta2_star = rgamma(1, shape = alpha, scale = beta)
+    num = (1/theta1_star)^n1*(exp(-n1*(xbar1/theta1_star)))*(1/theta2_star)^n2*(exp(-n2*(xbar2/theta2_star)))
+    dem = (1/air_test$theta1[i-1])^n1*(exp(-n1*(xbar1/air_test$theta1[i-1])))*(1/air_test$theta2[i-1])^n2*(exp(-n2*(xbar2/air_test$theta2[i-1])))
+    ratio = min(num/dem, 1)
+    u = runif(1,0,1)
+    if(u < ratio){
+      #update with theta_star
+      air_test$theta1[i] = theta1_star
+      air_test$theta2[i] = theta2_star
+      #check u<r
+      air_test$r[i] = ratio
+      air_test$u[i] = u
+      i = i + 1
+    }
+  }
+  #drop burn_in
+  t_burn = 0.05*n
+  air_drop_burnin = air_test[-(1:t_burn), ]
+  n_new = nrow(air_drop_burnin)
+  #print the result
+  print(paste('avg_theta1:', mean(air_drop_burnin$theta1)))
+  print(paste('avg_theta2:', mean(air_drop_burnin$theta2)))   
+  print(paste('P(??1 ??? ??2 +10|X1, X2):', sum(air_drop_burnin$theta1-air_drop_burnin$theta2 >=10)/n_new))
+  print(paste('P(??1 ??? ??2 +20|X1, X2):', sum(air_drop_burnin$theta1-air_drop_burnin$theta2 >=20)/n_new))
+  return(air_drop_burnin)
+}
+```
+
+```{r}
+result_b = air_test_func2(10000)
+```
+
+Extra Credit: doing it using result of (a)
+```{r}
+delta = seq(10, 20, 0.5)
+p = rep(NA, length(delta))
+for(i in (1:length(delta))){
+  b = delta[i]
+  p[i] = sum(result1$theta1-result1$theta2 >=b)/n_new
+}
+g1 = data.frame('delta' = delta, 'prob' = p)
+ggplot(g1, aes(x = g1.delta, y = g1.prob)) + geom_line()
+```
+
+Q2
+```{r}
+lamb_data = read.csv('q3data.csv')
+lxbar2 = lamb_data$Average[2]
+lxbar3 = lamb_data$Average[3]
+sigma2 = 9
+sigma3 = 9
+n2 = 9
+n3 = 9
+```
+h1(beta) = U[8,18], h2(taos) = gamma(16, 0.25)
+method1
+```{r}
+lamb_test = data.frame('beta'= rep(NA, n), 'tao'=rep(NA, n), 'm2' = rep(NA,n), 'm3'= rep(NA,n), 'v2'= rep(NA,n), 'v3'= rep(NA,n), 'y2'= rep(NA,n), 'y3'= rep(NA,n))
+n= 1000
+lamb_test$beta = runif(n, 8, 18)
+lamb_test$tao = rgamma(n, 16, 0.25)
+lamb_test$m2 = (sigma2*lamb_test$beta + lamb_test$tao*lxbar2)/(sigma2/n2+lamb_test$tao)
+lamb_test$m3 = (sigma3*lamb_test$beta + lamb_test$tao*lxbar3)/(sigma3/n3+lamb_test$tao)
+lamb_test$v2 = (sigma2/n2*lamb_test$tao)/(sigma2/n2+lamb_test$tao)
+lamb_test$v3 = (sigma3/n3*lamb_test$tao)/(sigma3/n3+lamb_test$tao)
+lamb_test$y2 = rnorm(n,lamb_test$m2, sigma2+lamb_test$v2)
+lamb_test$y3 = rnorm(n,lamb_test$m3, sigma2+lamb_test$v3)
+```
+method2, directly getP(y2-y3>b|X2, X3)
+```{r}
+m_delta = lamb_test$tao/(1+lamb_test$tao)*(lxbar2-lxbar3)
+dem = sqrt(18+2*lamb_test$tao/(1+lamb_test$tao))
+lamb_result2 = data.frame('m2_m3' = m_delta, 'dem' = dem)
+```
+y2-y3 > b
+```{r}
+lamb_result = data.frame('y2' = lamb_test$y2, 'y3' = lamb_test$y3)
+
+get_lamb_result <- function(df, var){
+  for(i in var){
+    b = strtoi(substr(i, 2,2))
+    df[i] = ifelse(df['y2']>df['y3'] + b, 1,0)
+    #lamb_result = cbind(lamb_result, i_result)
+    print(paste('P(y2>y3+',b, 'is:', colMeans(df[i])))
+  }
+  return(df)
+}
+
+get_lamb_result2 <- function(df, var){
+  for(i in var){
+    b = strtoi(substr(i, 2,2))
+    df[i] = 1-dnorm(unlist((b-df['m2_m3'])/df['dem']))
+    #lamb_result = cbind(lamb_result, i_result)
+    print(paste('P(y2>y3+',b, 'is:', colMeans(df[i])))
+  }
+  return(df)
+}
+```
+```{r}
+var = c('b0', 'b1', 'b3', 'b5')
+lamb_1 = get_lamb_result(lamb_result, var)
+lamb_2 = get_lamb_result2(lamb_result2, var)
+```
+
+Q3
+```{r}
+deltaq = c(32, 34, 36, 38, 40)
+deltaq2 = seq(32, 40, 0.5)
+q = 100
+r = 100
+n = 200
+sigma = 20
+
+p2 = rep(NA, length(deltaq2))
+  for (i in deltaq2){
+    index = which(deltaq2 == i)
+    c_nqr2 = n/r*(30+1.28*sqrt(2*sigma/n)-q/n*i)
+    pp2 = dnorm((i-c_nqr2)/sqrt(2*sigma/r + 2*sigma/q))
+    print(pp2)
+    p2[index] = pp2
+  }
+g = data.frame('delta' = deltaq, 'prob' = p)
+g2 =data.frame('delta' = deltaq2, 'prob' = p2)
+#plot
+ggplot() +
+  geom_point(data = g, aes(x = delta, y = prob),  color = 'red')+
+  geom_line(data = g, aes(x = delta, y = prob),  color = 'red') +
+  geom_point(data = g2, aes(x = delta, y = prob), color = 'darkblue')+
+  geom_line(data = g2, aes(x = delta, y = prob), color = 'darkblue') +
+  ggtitle('Distribution of P based on different deltaq') + xlab('deltaq') +ylab('probability')
+```
+EXTRA CREDIT: SPRT
+```{r}
+theta2 = 1
+theta1 = 0
+upper = rep(NA, 20)
+lower = rep(NA, 20)
+for(i in seq(1, 21)){
+  #get (lower, upper) for i(1~20) stage
+  upper[i] = log(9)/(theta2-theta1) + i*(theta1+theta2)/2
+  lower[i] = -log(9)/(theta2-theta1) + i*(theta1+theta2)/2
+}
+library(tidyr)
+bound = data.frame('index' = seq(1, 21), 'upper' = upper, 'lower' = lower)
+bound %>%
+  gather(key, value, upper, lower) %>%
+  ggplot(aes(x = index, y = value, colour = key)) + 
+  geom_line(size = 2) + 
+  ggtitle(" Bound Area for X(theta1 = 0, theta2 = 1)") +
+  xlab('n') + ylab('SumXi')
+
+```
+simulation
+```{r}
+#generate 1000 sequences, each sequence with 20 steps
+a = 100
+b = 50
+sprt_matrix = matrix(0, nrow = a, ncol = b)
+stop_vector = rep(NA, a)
+for(t in seq(1, a)){
+  i = 1
+  while(i < b){
+    #get the xi
+    sprt_matrix[i, t] = rnorm(1, 0.5, 1) 
+    sumxi = sum(sprt_matrix[i, t])
+    if(sumxi >= upper[i]){
+      print(paste('Stop! at', i, 'stage, say theta = theta2'))
+      stop_vector[t] = i
+    }else if(sumxi <= lower[i]){
+      print(paste('Stop! at', i, 'stage, say theta = theta1'))
+      stop_vector[t] =i
+    }else{
+      print(paste('Continue to', i+1, 'stage'))
+      i = i+1
+    }
+  }
+}
+```
