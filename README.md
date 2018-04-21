@@ -30,6 +30,12 @@ Multiple Projects for Data Analysis in various industries(Retail, e-Commerce, Re
 - Built and modified rider churn prediction models (Logistic Regression, Random Forest) using Sklearn
 - Preformed Cost Benefit Analysis of methods in new user acquisition and potential churning user retention
 
+### Real Estate Estimation of best investment area in NYC(Python)
+-	Conducted data mining, feature extraction on Zillow historical house price estimation and Airbnb short term rent price, based on ad-hoc business target: Find the best investment area for short-term leasing
+-	Preformed data munging on particular features with multiple units in different datasets, wrote functions to link data together in a scalable way to allow new data append
+-	Created specific metadata and metrics, such as Cap Rate/Occupancy Rate to refine and better understand business goal
+-	Successfully target best investment area in NYC based on defined metrics and trend prediction 
+
 
 ### Water Usage Capcity Analysis and Prediction(SAS)
 - Including feature generation/selection, transformation(boxcox, ); 
