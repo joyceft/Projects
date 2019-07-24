@@ -3,6 +3,7 @@ title: "weak learner"
 author: "Tianyi Fang"
 date: "December 3, 2017"
 output: pdf_document
+  keep_md: true 
 ---
 
 ```{r setup, include=FALSE}
